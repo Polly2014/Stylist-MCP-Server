@@ -11,6 +11,8 @@ An AI-powered fashion recommendation MCP (Model Context Protocol) server that pr
 - 🔍 **Hybrid Search**: Combines metadata filtering with semantic vector search
 - 🌍 **Multilingual**: Supports English and Chinese queries
 - 🧥 **Full Outfit Coordination**: Top + bottom combinations or dresses with style reasoning
+- 🔐 **API Key Authentication**: Secure remote access with configurable API keys
+- 🖼️ **Image URLs**: Direct HTTPS links to garment images
 
 ## Quick Start
 
@@ -18,14 +20,14 @@ An AI-powered fashion recommendation MCP (Model Context Protocol) server that pr
 
 ```bash
 # Clone and setup
-git clone <repo-url>
-cd stylist-mcp-server
+git clone https://github.com/Polly2014/Stylist-MCP-Server.git
+cd Stylist-MCP-Server
 chmod +x setup.sh
 ./setup.sh
 
 # Edit configuration
 cp .env.example .env
-nano .env  # Configure DRESSCODE_ROOT, CHROMADB_PATH
+nano .env  # Configure DRESSCODE_ROOT, CHROMADB_PATH, etc.
 ```
 
 ### 2. Build Index
@@ -42,7 +44,7 @@ python scripts/build_chromadb.py
 python src/mcp_server.py
 
 # SSE mode (for remote access)
-python src/mcp_server.py --sse --port 8080
+python src/mcp_server.py --sse --port 8888
 ```
 
 ## Configuration
@@ -56,7 +58,10 @@ Environment variables (set in `.env`):
 | `LLM_API_ENDPOINT` | LLM API endpoint | `http://localhost:23333/api/anthropic/v1/messages` |
 | `MODEL_NAME` | Claude model name | `claude-3-5-haiku-20241022` |
 | `MCP_HOST` | SSE server host | `0.0.0.0` |
-| `MCP_PORT` | SSE server port | `8080` |
+| `MCP_PORT` | SSE server port | `8888` |
+| `MCP_EXTERNAL_HOST` | External hostname for image URLs | `localhost` |
+| `MCP_USE_SSL` | Enable HTTPS for image URLs | `false` |
+| `MCP_API_KEY` | API key for authentication | (empty = disabled) |
 
 ## Available Tools
 
@@ -68,38 +73,51 @@ Fashion recommendation tool that intelligently interprets user queries.
 ```json
 {
   "query": "recommend 3 casual outfits for a date",
-  "include_reasoning": true
+  "include_reasoning": true,
+  "include_image_urls": true
 }
 ```
 
 **Output modes:**
-- `single_item`: Returns list of individual garments
-- `full_outfit`: Returns coordinated outfit combinations (top+bottom or dress)
+- `single_item`: Returns list of individual garments (e.g., "推荐T恤", "show me dresses")
+- `full_outfit`: Returns coordinated outfit combinations (e.g., "推荐3套穿搭", "outfit for date")
 
-### `get_garment_image`
-
-Get the image of a specific garment by ID.
-
-**Input:**
+**Example Response (full_outfit mode):**
 ```json
 {
-  "garment_id": "049119",
-  "category": "dresses"
+  "mode": "full_outfit",
+  "num_outfits": 3,
+  "outfits": [
+    {
+      "type": "two_piece",
+      "top": {
+        "garment_id": "003841",
+        "description": "White cotton t-shirt...",
+        "image_url": "https://stylist.polly.wang/images/upper_body/images/003841_1.jpg"
+      },
+      "bottom": {...},
+      "score": 0.85,
+      "reason": "Great casual pairing..."
+    }
+  ],
+  "stylist_advice": "These outfits are perfect for..."
 }
 ```
 
-## Claude Desktop Integration
+## Client Integration
 
-Add to your Claude Desktop config (`~/.config/Claude/claude_desktop_config.json`):
+### Claude Desktop (Local stdio)
+
+Add to `~/.config/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "stylist-recommender": {
       "command": "python",
-      "args": ["/path/to/stylist-mcp-server/src/mcp_server.py"],
+      "args": ["/path/to/Stylist-MCP-Server/src/mcp_server.py"],
       "env": {
-        "DRESSCODE_ROOT": "/path/to/data/DressCode",
+        "DRESSCODE_ROOT": "/path/to/DressCode",
         "CHROMADB_PATH": "/path/to/chroma_db",
         "LLM_API_ENDPOINT": "http://localhost:23333/api/anthropic/v1/messages"
       }
@@ -108,31 +126,93 @@ Add to your Claude Desktop config (`~/.config/Claude/claude_desktop_config.json`
 }
 ```
 
+### Claude Desktop (Remote SSE)
+
+```json
+{
+  "mcpServers": {
+    "stylist-remote": {
+      "command": "npx",
+      "args": [
+        "-y", "@anthropic-ai/mcp-remote@latest",
+        "--transport", "sse-only",
+        "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY"
+      ]
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "stylist": {
+      "url": "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY"
+    }
+  }
+}
+```
+
+### Python Client (SSE)
+
+```python
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+
+async def main():
+    url = "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY"
+    
+    async with sse_client(url) as streams:
+        async with ClientSession(*streams) as session:
+            await session.initialize()
+            
+            result = await session.call_tool(
+                "stylist_recommend",
+                {"query": "推荐3套约会穿搭", "include_reasoning": True}
+            )
+            print(result)
+```
+
 ## SSE Mode Endpoints
 
-When running in SSE mode:
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `/health` | ❌ | Health check |
+| `/sse` | ✅ | SSE connection for MCP |
+| `/messages/` | ✅ | MCP message handling |
+| `/tools` | ✅ | List available tools |
+| `/images/*` | ❌ | Static image serving |
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/tools` | GET | List available tools |
-| `/sse` | GET | SSE connection for MCP |
-| `/messages` | POST | MCP message handling |
+**Authentication Methods:**
+- Query parameter: `?apiKey=YOUR_KEY`
+- Header: `X-API-Key: YOUR_KEY`
+- Bearer token: `Authorization: Bearer YOUR_KEY`
 
 ## Project Structure
 
 ```
-stylist-mcp-server/
+Stylist-MCP-Server/
 ├── src/
 │   ├── config.py          # Configuration (env vars)
 │   ├── garment_db.py      # ChromaDB wrapper
-│   ├── stylist_tool.py    # Recommendation logic
-│   └── mcp_server.py      # MCP server (stdio + SSE)
+│   ├── stylist_tool.py    # Recommendation logic (single_item + full_outfit)
+│   └── mcp_server.py      # MCP server (stdio + SSE + auth)
 ├── scripts/
 │   ├── build_chromadb.py  # Index builder
-│   └── test_mcp.py        # Test suite
+│   ├── build_from_jsonl.py # Build from attributes JSONL
+│   └── test_mcp.py        # Comprehensive test suite
 ├── config/
-│   └── claude_desktop.json # Example config
+│   ├── claude_desktop.json           # Local stdio config
+│   ├── claude_desktop_remote.example.json  # Remote SSE config
+│   ├── cursor_mcp.example.json       # Cursor config
+│   └── python_client_example.py      # Python client example
+├── data/
+│   ├── garment_attributes.jsonl      # Garment metadata
+│   └── chroma_db/                    # Vector database
 ├── requirements.txt
 ├── setup.sh
 ├── .env.example
@@ -142,17 +222,70 @@ stylist-mcp-server/
 ## Testing
 
 ```bash
-# Run local tests
+# Quick test (skip LLM reasoning)
+python scripts/test_mcp.py --quick
+
+# Full test with LLM reasoning
+python scripts/test_mcp.py
+
+# Verbose output
+python scripts/test_mcp.py --verbose
+
+# Local only (no remote server tests)
 python scripts/test_mcp.py --local-only
 
-# Run full tests (with SSE server running)
-python scripts/test_mcp.py --url http://localhost:8080
+# Custom LLM endpoint
+LLM_API_ENDPOINT=http://localhost:23335/api/anthropic/v1/messages python scripts/test_mcp.py
 ```
+
+**Test Coverage:**
+- 📦 Database: Basic search, filters, multi-category
+- 👕 Single Item: T-shirt, dress, Chinese queries
+- 👔 Full Outfit: Basic, formal, Chinese, male (no dresses)
+- 🧠 LLM Reasoning: Scoring, reasons, stylist advice
+- 🌐 Remote: Health, tools, images, URL accessibility
+
+## Deployment
+
+### With Nginx (Recommended)
+
+1. Run MCP Server on internal port:
+   ```bash
+   python src/mcp_server.py --sse --port 8888
+   ```
+
+2. Configure Nginx reverse proxy with SSL:
+   ```nginx
+   server {
+       listen 443 ssl;
+       server_name stylist.polly.wang;
+       
+       ssl_certificate /etc/letsencrypt/live/stylist.polly.wang/fullchain.pem;
+       ssl_certificate_key /etc/letsencrypt/live/stylist.polly.wang/privkey.pem;
+       
+       location / {
+           proxy_pass http://127.0.0.1:8888;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection "upgrade";
+           proxy_buffering off;
+           proxy_read_timeout 86400;
+       }
+   }
+   ```
+
+3. Set environment variables:
+   ```bash
+   MCP_EXTERNAL_HOST=stylist.polly.wang
+   MCP_USE_SSL=true
+   MCP_API_KEY=your-secure-api-key
+   ```
 
 ## Performance
 
-- **Haiku model**: ~19s per query (recommended for speed)
-- **Sonnet model**: ~48s per query (higher quality)
+- **Haiku model**: ~19s per full outfit query (recommended for speed)
+- **Sonnet model**: ~48s per full outfit query (higher quality)
+- **Quick mode** (no reasoning): ~2s per query
 
 ## License
 
