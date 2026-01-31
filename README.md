@@ -82,25 +82,110 @@ Fashion recommendation tool that intelligently interprets user queries.
 - `single_item`: Returns list of individual garments (e.g., "推荐T恤", "show me dresses")
 - `full_outfit`: Returns coordinated outfit combinations (e.g., "推荐3套穿搭", "outfit for date")
 
+**Example Response (single_item mode):**
+```json
+{
+  "query": "recommend 5 casual T-shirts for summer",
+  "mode": "single_item",
+  "parsed_intent": {
+    "language": "en",
+    "recommendation_mode": "single_item",
+    "count": 5,
+    "garment_type": "t-shirt",
+    "category": "upper_body",
+    "style": "casual",
+    "season": "summer"
+  },
+  "num_results": 5,
+  "recommendations": [
+    {
+      "garment_id": "003841",
+      "description": "White cotton t-shirt with round neck, short sleeves, relaxed fit",
+      "similarity_score": 0.87,
+      "category": "upper_body",
+      "garment_type": "t-shirt",
+      "colors": ["white"],
+      "styles": ["casual", "minimalist"],
+      "occasions": ["everyday", "casual"],
+      "image_url": "https://stylist.polly.wang/images/upper_body/images/003841_1.jpg"
+    },
+    {
+      "garment_id": "003925",
+      "description": "Light blue linen t-shirt, breathable fabric, classic cut",
+      "similarity_score": 0.82,
+      "category": "upper_body",
+      "garment_type": "t-shirt",
+      "colors": ["blue"],
+      "styles": ["casual"],
+      "occasions": ["everyday", "vacation"],
+      "image_url": "https://stylist.polly.wang/images/upper_body/images/003925_1.jpg"
+    }
+    // ... more items
+  ],
+  "stylist_advice": "These lightweight cotton and linen t-shirts are perfect for summer..."
+}
+```
+
 **Example Response (full_outfit mode):**
 ```json
 {
+  "query": "推荐3套约会穿搭",
   "mode": "full_outfit",
+  "parsed_intent": {
+    "language": "zh",
+    "recommendation_mode": "full_outfit",
+    "count": 3,
+    "occasion": "date",
+    "style": "elegant"
+  },
   "num_outfits": 3,
   "outfits": [
     {
       "type": "two_piece",
       "top": {
-        "garment_id": "003841",
-        "description": "White cotton t-shirt...",
-        "image_url": "https://stylist.polly.wang/images/upper_body/images/003841_1.jpg"
+        "garment_id": "005123",
+        "description": "Soft pink silk blouse with subtle ruffle details",
+        "similarity_score": 0.85,
+        "category": "upper_body",
+        "garment_type": "blouse",
+        "colors": ["pink"],
+        "styles": ["romantic", "elegant"],
+        "occasions": ["date", "party"],
+        "image_url": "https://stylist.polly.wang/images/upper_body/images/005123_1.jpg"
       },
-      "bottom": {...},
-      "score": 0.85,
-      "reason": "Great casual pairing..."
+      "bottom": {
+        "garment_id": "012456",
+        "description": "High-waisted black pencil skirt, knee length",
+        "similarity_score": 0.83,
+        "category": "lower_body",
+        "garment_type": "skirt",
+        "colors": ["black"],
+        "styles": ["classic", "elegant"],
+        "occasions": ["work", "date"],
+        "image_url": "https://stylist.polly.wang/images/lower_body/images/012456_1.jpg"
+      },
+      "score": 0.90,
+      "reason": "The soft pink blouse pairs beautifully with the classic black skirt, creating a romantic yet sophisticated look perfect for a date."
+    },
+    {
+      "type": "dress",
+      "dress": {
+        "garment_id": "020714",
+        "description": "Elegant navy blue A-line dress with V-neck, midi length",
+        "similarity_score": 0.88,
+        "category": "dresses",
+        "garment_type": "dress",
+        "colors": ["navy", "blue"],
+        "styles": ["elegant", "classic"],
+        "occasions": ["date", "party", "formal"],
+        "image_url": "https://stylist.polly.wang/images/dresses/images/020714_1.jpg"
+      },
+      "score": 0.88,
+      "reason": "This navy A-line dress is timeless and flattering, ideal for a romantic dinner date."
     }
+    // ... more outfits
   ],
-  "stylist_advice": "These outfits are perfect for..."
+  "stylist_advice": "这些穿搭都非常适合约会场合。粉色丝质上衣搭配黑色铅笔裙展现优雅气质，而海军蓝连衣裙则是经典之选，适合各种约会场景。"
 }
 ```
 
