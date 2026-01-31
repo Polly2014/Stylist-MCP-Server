@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "stylist-recommender": {
+      "command": "python",
+      "args": ["/path/to/stylist-mcp-server/src/mcp_server.py"],
+      "env": {
+        "DRESSCODE_ROOT": "/path/to/data/DressCode",
+        "CHROMADB_PATH": "/path/to/chroma_db",
+        "LLM_API_ENDPOINT": "http://localhost:23333/api/anthropic/v1/messages",
+        "MODEL_NAME": "claude-3-5-haiku-20241022"
+      }
+    }
+  }
+}
