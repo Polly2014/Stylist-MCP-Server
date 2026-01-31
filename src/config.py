@@ -58,7 +58,9 @@ AGENT_MAESTRO_BASE_URL = os.getenv("AGENT_MAESTRO_BASE_URL", "http://localhost:2
 # =============================================================================
 
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
-MCP_PORT = int(os.getenv("MCP_PORT", "8080"))
+MCP_PORT = int(os.getenv("MCP_PORT", "8888"))
+MCP_EXTERNAL_HOST = os.getenv("MCP_EXTERNAL_HOST", None)  # External IP/hostname for image URLs
+MCP_USE_SSL = os.getenv("MCP_USE_SSL", "false").lower() in ("true", "1", "yes")  # Use HTTPS for image URLs
 
 # =============================================================================
 # Image Processing

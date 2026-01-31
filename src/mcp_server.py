@@ -28,12 +28,45 @@ from mcp.types import Tool, TextContent, ImageContent, Resource
 
 from stylist_tool import StylistSearchTool, TOOL_SCHEMA
 from garment_db import GarmentDatabase
-from config import DRESSCODE_ROOT, MCP_HOST, MCP_PORT
+from config import DRESSCODE_ROOT, MCP_HOST, MCP_PORT, MCP_EXTERNAL_HOST, MCP_USE_SSL
 
 
 # Initialize server and tools
 app = Server("stylist-recommender")
 stylist_tool = StylistSearchTool()
+
+# Global variable to store the base URL for image serving
+_image_base_url = None
+
+def set_image_base_url(host: str, port: int, use_ssl: bool):
+    """Set the base URL for image serving"""
+    global _image_base_url
+    protocol = "https" if use_ssl else "http"
+    # If using standard ports (80/443) or behind reverse proxy, omit port
+    if use_ssl and (port == 443 or MCP_USE_SSL):
+        _image_base_url = f"{protocol}://{host}/images"
+    elif not use_ssl and port == 80:
+        _image_base_url = f"{protocol}://{host}/images"
+    else:
+        _image_base_url = f"{protocol}://{host}:{port}/images"
+
+def get_image_url(image_path: str) -> str | None:
+    """Convert local image path to URL"""
+    if not _image_base_url or not image_path:
+        return None
+    # image_path example: /datasets/DressCode/dresses/images/012345_1.jpg
+    # We need to extract: dresses/images/012345_1.jpg
+    try:
+        path = Path(image_path)
+        # Find the category part (dresses, upper_body, lower_body)
+        parts = path.parts
+        for i, part in enumerate(parts):
+            if part in ["dresses", "upper_body", "lower_body"]:
+                relative_path = "/".join(parts[i:])
+                return f"{_image_base_url}/{relative_path}"
+    except Exception:
+        pass
+    return None
 
 
 # Additional tool for getting garment images
@@ -115,7 +148,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
             None,
             lambda: stylist_tool.recommend_outfit(
                 query=arguments["query"],
-                include_reasoning=arguments.get("include_reasoning", True)
+                include_reasoning=arguments.get("include_reasoning", True),
+                include_image_urls=arguments.get("include_image_urls", True),
+                image_url_generator=get_image_url
             )
         )
         
@@ -191,12 +226,12 @@ def create_starlette_app():
     from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
     from starlette.routing import Route, Mount
-    from starlette.responses import JSONResponse
+    from starlette.responses import JSONResponse, Response
     from starlette.middleware import Middleware
     from starlette.middleware.cors import CORSMiddleware
     
-    # SSE transport at /sse endpoint
-    sse = SseServerTransport("/messages")
+    # SSE transport at /messages endpoint
+    sse = SseServerTransport("/messages/")
     
     async def handle_sse(request):
         """Handle SSE connection for MCP"""
@@ -207,10 +242,7 @@ def create_starlette_app():
                 streams[0], streams[1], 
                 app.create_initialization_options()
             )
-    
-    async def handle_messages(request):
-        """Handle POST messages for SSE transport"""
-        await sse.handle_post_message(request.scope, request.receive, request._send)
+        return Response()
     
     async def health_check(request):
         """Health check endpoint"""
@@ -231,6 +263,8 @@ def create_starlette_app():
             ]
         })
     
+    from starlette.staticfiles import StaticFiles
+    
     # Create Starlette app with CORS enabled
     starlette_app = Starlette(
         debug=True,
@@ -238,7 +272,9 @@ def create_starlette_app():
             Route("/health", endpoint=health_check, methods=["GET"]),
             Route("/tools", endpoint=list_tools_http, methods=["GET"]),
             Route("/sse", endpoint=handle_sse, methods=["GET"]),
-            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+            Mount("/messages/", app=sse.handle_post_message),
+            # Static file serving for images
+            Mount("/images", app=StaticFiles(directory=str(DRESSCODE_ROOT)), name="images"),
         ],
         middleware=[
             Middleware(
@@ -270,25 +306,43 @@ async def run_stdio():
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
-async def run_sse(host: str = None, port: int = None):
+async def run_sse(host: str = None, port: int = None, ssl_cert: str = None, ssl_key: str = None, external_host: str = None):
     """Run MCP server in SSE mode (for remote access)"""
     import uvicorn
     
     # Use provided args or fall back to config defaults
     host = host or MCP_HOST
     port = port or MCP_PORT
+    external_host = external_host or MCP_EXTERNAL_HOST  # Use config default if not provided
+    
+    # Determine protocol - use MCP_USE_SSL for reverse proxy scenarios
+    use_ssl = (ssl_cert and ssl_key) or MCP_USE_SSL
+    protocol = "https" if use_ssl else "http"
+    
+    # Set image base URL for URL generation
+    # Priority: external_host (arg or config) > host (if not 0.0.0.0) > localhost
+    if external_host:
+        url_host = external_host
+    elif host != "0.0.0.0":
+        url_host = host
+    else:
+        url_host = "localhost"
+    set_image_base_url(url_host, port, use_ssl)
     
     print(f"Starting Stylist Recommender MCP Server (SSE mode)...", flush=True)
-    print(f"  Listening on http://{host}:{port}", flush=True)
-    print(f"  Health check: http://{host}:{port}/health", flush=True)
-    print(f"  SSE endpoint: http://{host}:{port}/sse", flush=True)
-    print(f"  Messages endpoint: http://{host}:{port}/messages", flush=True)
+    print(f"  Listening on {protocol}://{host}:{port}", flush=True)
+    print(f"  Health check: {protocol}://{host}:{port}/health", flush=True)
+    print(f"  SSE endpoint: {protocol}://{host}:{port}/sse", flush=True)
+    print(f"  Messages endpoint: {protocol}://{host}:{port}/messages", flush=True)
+    print(f"  Images endpoint: {protocol}://{host}:{port}/images/", flush=True)
     
     config = uvicorn.Config(
         starlette_app,
         host=host,
         port=port,
-        log_level="info"
+        log_level="info",
+        ssl_certfile=ssl_cert,
+        ssl_keyfile=ssl_key
     )
     server = uvicorn.Server(config)
     await server.serve()
@@ -309,11 +363,23 @@ async def main():
         "--port", type=int, default=None,
         help=f"Port to bind (SSE mode only, default: {MCP_PORT})"
     )
+    parser.add_argument(
+        "--ssl-cert", type=str, default=None,
+        help="Path to SSL certificate file (enables HTTPS)"
+    )
+    parser.add_argument(
+        "--ssl-key", type=str, default=None,
+        help="Path to SSL private key file (enables HTTPS)"
+    )
+    parser.add_argument(
+        "--external-host", type=str, default=None,
+        help="External hostname/IP for image URLs (e.g., 20.51.201.85)"
+    )
     
     args = parser.parse_args()
     
     if args.sse:
-        await run_sse(args.host, args.port)
+        await run_sse(args.host, args.port, args.ssl_cert, args.ssl_key, args.external_host)
     else:
         await run_stdio()
 

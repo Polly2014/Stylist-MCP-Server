@@ -159,9 +159,9 @@ class StylistSearchTool:
             "recommendations": recommendations
         }
 
-    def _format_garment(self, r: Dict[str, Any]) -> Dict[str, Any]:
+    def _format_garment(self, r: Dict[str, Any], include_image_url: bool = False, image_url_generator: callable = None) -> Dict[str, Any]:
         """Format a single garment result"""
-        return {
+        result = {
             "garment_id": r["garment_id"],
             "description": r["document"],
             "similarity_score": 1 - r["distance"],
@@ -170,8 +170,16 @@ class StylistSearchTool:
             "colors": r["metadata"].get("colors", "").split(","),
             "styles": r["metadata"].get("styles", "").split(","),
             "occasions": r["metadata"].get("occasions", "").split(","),
-            "image_path": r["image_path"],
+            "_image_path": r.get("image_path"),  # Internal use for URL generation
         }
+        
+        # Add image URL if requested and generator available
+        if include_image_url and image_url_generator and r.get("image_path"):
+            image_url = image_url_generator(r["image_path"])
+            if image_url:
+                result["image_url"] = image_url
+        
+        return result
 
     def _generate_outfit_combinations(
         self,
@@ -397,7 +405,9 @@ Provide a brief (2-3 sentences) overall styling recommendation explaining why th
     def recommend_outfit(
         self,
         query: str,
-        include_reasoning: bool = True
+        include_reasoning: bool = True,
+        include_image_urls: bool = False,
+        image_url_generator: callable = None
     ) -> Dict[str, Any]:
         """
         Unified outfit recommendation entry point
@@ -409,6 +419,8 @@ Provide a brief (2-3 sentences) overall styling recommendation explaining why th
         Args:
             query: User's fashion request
             include_reasoning: Whether to include AI explanation
+            include_image_urls: Whether to include image URLs
+            image_url_generator: Optional function to convert image path to URL
         
         Returns:
             Dict with recommendations or outfits based on detected mode
@@ -423,9 +435,9 @@ Provide a brief (2-3 sentences) overall styling recommendation explaining why th
         
         # Step 2: Branch based on mode
         if mode == "single_item":
-            return self._recommend_single_items(query, intent, count, language, include_reasoning)
+            return self._recommend_single_items(query, intent, count, language, include_reasoning, include_image_urls, image_url_generator)
         else:
-            return self._recommend_full_outfits(query, intent, count, language, gender, include_reasoning)
+            return self._recommend_full_outfits(query, intent, count, language, gender, include_reasoning, include_image_urls, image_url_generator)
 
     def _recommend_single_items(
         self,
@@ -433,7 +445,9 @@ Provide a brief (2-3 sentences) overall styling recommendation explaining why th
         intent: Dict[str, Any],
         count: int,
         language: str,
-        include_reasoning: bool
+        include_reasoning: bool,
+        include_image_urls: bool = False,
+        image_url_generator: callable = None
     ) -> Dict[str, Any]:
         """Handle single item recommendations (T-shirts, dresses, etc.)"""
         
@@ -452,7 +466,11 @@ Provide a brief (2-3 sentences) overall styling recommendation explaining why th
             color=intent.get("color"),
         )
         
-        recommendations = [self._format_garment(r) for r in results]
+        recommendations = [self._format_garment(r, include_image_urls, image_url_generator) for r in results]
+        
+        # Remove internal _image_path from output
+        for rec in recommendations:
+            rec.pop("_image_path", None)
         
         result = {
             "query": query,
@@ -507,7 +525,9 @@ Provide a brief (2-3 sentences) styling recommendation explaining why these choi
         count: int,
         language: str,
         gender: Optional[str],
-        include_reasoning: bool
+        include_reasoning: bool,
+        include_image_urls: bool = False,
+        image_url_generator: callable = None
     ) -> Dict[str, Any]:
         """Handle full outfit recommendations (top+bottom or dress)"""
         
@@ -558,6 +578,32 @@ Provide a brief (2-3 sentences) styling recommendation explaining why these choi
         # Select top N outfits
         selected_outfits = evaluated[:count]
         
+        # Add image URLs if requested
+        if include_image_urls and image_url_generator:
+            for outfit in selected_outfits:
+                if outfit.get("type") == "two_piece":
+                    if outfit.get("top") and outfit["top"].get("_image_path"):
+                        url = image_url_generator(outfit["top"]["_image_path"])
+                        if url:
+                            outfit["top"]["image_url"] = url
+                    if outfit.get("bottom") and outfit["bottom"].get("_image_path"):
+                        url = image_url_generator(outfit["bottom"]["_image_path"])
+                        if url:
+                            outfit["bottom"]["image_url"] = url
+                elif outfit.get("type") == "dress":
+                    if outfit.get("dress") and outfit["dress"].get("_image_path"):
+                        url = image_url_generator(outfit["dress"]["_image_path"])
+                        if url:
+                            outfit["dress"]["image_url"] = url
+        
+        # Remove internal _image_path from output
+        for outfit in selected_outfits:
+            if outfit.get("type") == "two_piece":
+                outfit["top"].pop("_image_path", None)
+                outfit["bottom"].pop("_image_path", None)
+            elif outfit.get("type") == "dress":
+                outfit["dress"].pop("_image_path", None)
+        
         result = {
             "query": query,
             "mode": "full_outfit",
@@ -591,6 +637,11 @@ Supports natural language queries in both English and Chinese. Automatically det
             "include_reasoning": {
                 "type": "boolean",
                 "description": "Whether to include AI stylist advice and outfit coordination reasoning",
+                "default": True
+            },
+            "include_image_urls": {
+                "type": "boolean",
+                "description": "Whether to include image URLs that can be fetched directly",
                 "default": True
             }
         },
