@@ -3,12 +3,12 @@ Stylist Search Tool - MCP Tool for garment recommendation
 Integrates with Agent systems for natural language fashion queries
 """
 import json
-import requests
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-from config import ANTHROPIC_API_ENDPOINT, MODEL_NAME, DRESSCODE_ROOT, ATTRIBUTE_SCHEMA
+from config import DRESSCODE_ROOT, ATTRIBUTE_SCHEMA
 from garment_db import GarmentDatabase
+from llm_client import get_llm_client, parse_json_response, LLMError
 
 
 # Intent parsing prompt for Claude
@@ -16,89 +16,68 @@ INTENT_PARSE_PROMPT = """You are a fashion stylist assistant. Parse the user's c
 
 User query: "{query}"
 
-Extract the following parameters (return null if not specified or not applicable):
+Extract these parameters and return a FLAT JSON object (no nested objects):
 
-1. LANGUAGE & MODE DETECTION:
-   - language: "zh" | "en" (detect from user's query language)
-   - recommendation_mode: "single_item" | "full_outfit"
-     * "single_item": user wants specific garment types (e.g., "推荐T恤", "show me some dresses")
-     * "full_outfit": user wants complete outfits/穿搭 (e.g., "推荐3套穿搭", "recommend outfits for date")
-   - count: number of items/outfits to recommend (default: 3 for full_outfit, 5 for single_item)
+- language: "zh" | "en" (detect from user's query language)
+- recommendation_mode: "single_item" | "full_outfit"
+  * "single_item": user wants specific garment types (e.g., "推荐T恤", "show me dresses", "I need a T-shirt")
+  * "full_outfit": user wants complete outfits/穿搭 (e.g., "推荐3套穿搭", "recommend outfits for date")
+- count: number of items/outfits (default: 3 for full_outfit, 5 for single_item)
+- garment_type: one of ["dress", "top", "blouse", "shirt", "t-shirt", "sweater", "jacket", "coat", "pants", "jeans", "shorts", "skirt", "jumpsuit", "romper"] or null
+- category: "dresses" | "upper_body" | "lower_body" | null
+  * Infer from garment_type: dress/jumpsuit/romper → "dresses", top/blouse/shirt/t-shirt/sweater/jacket/coat → "upper_body", pants/jeans/shorts/skirt → "lower_body"
+- gender: "female" | "male" | "unisex" | null
+- style: one of ["classic", "boho", "minimalist", "preppy", "casual", "street_style", "sporty_chic", "grunge", "romantic", "edgy", "vintage", "elegant"] or null
+- season: one of ["spring", "summer", "fall", "winter", "all_season"] or null
+- occasion: one of ["casual", "work", "formal", "party", "date", "vacation", "athletic", "everyday"] or null
+- body_type: one of ["rectangle", "triangle", "inverted_triangle", "oval", "trapezoid", "hourglass", "pear", "apple", "athletic"] or null
+- color: primary color mentioned or null
+- semantic_query: refined search query describing the desired style (always provide)
 
-2. GARMENT FILTERS:
-   - garment_type: specific garment type if mentioned, one of ["dress", "top", "blouse", "shirt", "t-shirt", "sweater", "jacket", "coat", "pants", "jeans", "shorts", "skirt", "jumpsuit", "romper"] or null
-   - category: "dresses" | "upper_body" | "lower_body" | null
-     * If garment_type is specified, infer category automatically:
-       - dress/jumpsuit/romper → "dresses"
-       - top/blouse/shirt/t-shirt/sweater/jacket/coat → "upper_body"
-       - pants/jeans/shorts/skirt → "lower_body"
-     * If full_outfit mode and no specific type, leave as null
+IMPORTANT: Return ONLY a flat JSON object with all fields at the top level, like:
+{{"language": "en", "recommendation_mode": "single_item", "garment_type": "t-shirt", "category": "upper_body", ...}}
 
-3. STYLE ATTRIBUTES:
-   - gender: "female" | "male" | "unisex" | null
-   - style: one of ["classic", "boho", "minimalist", "preppy", "casual", "street_style", "sporty_chic", "grunge", "romantic", "edgy", "vintage", "elegant"] or null
-   - season: one of ["spring", "summer", "fall", "winter", "all_season"] or null
-   - occasion: one of ["casual", "work", "formal", "party", "date", "vacation", "athletic", "everyday"] or null
-   - body_type: one of ["rectangle", "triangle", "inverted_triangle", "oval", "trapezoid", "hourglass", "pear", "apple", "athletic"] or null
-   - color: primary color mentioned or null
-
-4. SEMANTIC QUERY:
-   - semantic_query: a refined search query describing the desired garment/outfit style (always provide this)
-
-Return ONLY a JSON object with these fields."""
+Do NOT use nested structures or category headers."""
 
 
 class StylistSearchTool:
     """
     Fashion recommendation tool that combines:
-    1. Intent parsing (using Claude via Agent Maestro)
+    1. Intent parsing (using LLM - Claude/GPT-4o-mini/etc.)
     2. Hybrid search (ChromaDB metadata + semantic)
     3. Garment recommendation with reasoning
     """
     
     def __init__(self, db: Optional[GarmentDatabase] = None):
         self.db = db or GarmentDatabase()
+        self._llm = None  # Lazy initialization
+    
+    @property
+    def llm(self):
+        """Lazy-load LLM client"""
+        if self._llm is None:
+            self._llm = get_llm_client()
+        return self._llm
     
     def _parse_intent(self, query: str) -> Dict[str, Any]:
-        """Use Claude to parse natural language query into search parameters"""
+        """Use LLM to parse natural language query into search parameters"""
         
         prompt = INTENT_PARSE_PROMPT.format(query=query)
         
-        payload = {
-            "model": MODEL_NAME,
-            "max_tokens": 512,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ]
-        }
-        
         try:
-            response = requests.post(
-                ANTHROPIC_API_ENDPOINT,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01"
-                },
+            response_text = self.llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=512,
                 timeout=30
             )
             
-            if response.status_code != 200:
-                return {"semantic_query": query}  # Fallback to raw query
+            return parse_json_response(response_text)
             
-            result = response.json()
-            text = result["content"][0]["text"]
-            
-            # Parse JSON from response
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0]
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0]
-            
-            return json.loads(text.strip())
-            
-        except Exception as e:
+        except LLMError as e:
             print(f"Intent parsing failed: {e}")
+            return {"semantic_query": query}
+        except json.JSONDecodeError as e:
+            print(f"Intent parsing JSON error: {e}")
             return {"semantic_query": query}
     
     def search(
@@ -304,46 +283,28 @@ Return a JSON array with one object per combo:
 Score from 0.0 (poor match) to 1.0 (perfect match). Return ONLY the JSON array."""
 
         try:
-            response = requests.post(
-                ANTHROPIC_API_ENDPOINT,
-                json={
-                    "model": MODEL_NAME,
-                    "max_tokens": 1024,
-                    "messages": [{"role": "user", "content": eval_prompt}]
-                },
-                headers={
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01"
-                },
+            response_text = self.llm.chat(
+                messages=[{"role": "user", "content": eval_prompt}],
+                max_tokens=1024,
                 timeout=60
             )
             
-            if response.status_code == 200:
-                result = response.json()
-                text = result["content"][0]["text"]
+            evaluations = parse_json_response(response_text)
+            
+            # Merge evaluations into combinations
+            eval_map = {e["combo_id"]: e for e in evaluations}
+            for i, combo in enumerate(combinations):
+                if i in eval_map:
+                    combo["score"] = eval_map[i].get("score", 0.5)
+                    combo["reason"] = eval_map[i].get("reason", "")
+                else:
+                    combo["score"] = 0.5
+                    combo["reason"] = ""
+            
+            # Sort by score descending
+            combinations.sort(key=lambda x: x.get("score", 0), reverse=True)
                 
-                # Parse JSON from response
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0]
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0]
-                
-                evaluations = json.loads(text.strip())
-                
-                # Merge evaluations into combinations
-                eval_map = {e["combo_id"]: e for e in evaluations}
-                for i, combo in enumerate(combinations):
-                    if i in eval_map:
-                        combo["score"] = eval_map[i].get("score", 0.5)
-                        combo["reason"] = eval_map[i].get("reason", "")
-                    else:
-                        combo["score"] = 0.5
-                        combo["reason"] = ""
-                
-                # Sort by score descending
-                combinations.sort(key=lambda x: x.get("score", 0), reverse=True)
-                
-        except Exception as e:
+        except (LLMError, json.JSONDecodeError) as e:
             print(f"Outfit evaluation failed: {e}")
             # Assign default scores
             for combo in combinations:
@@ -380,24 +341,13 @@ I've selected these outfits:
 Provide a brief (2-3 sentences) overall styling recommendation explaining why these outfit selections suit the user's needs."""
 
         try:
-            response = requests.post(
-                ANTHROPIC_API_ENDPOINT,
-                json={
-                    "model": MODEL_NAME,
-                    "max_tokens": 256,
-                    "messages": [{"role": "user", "content": advice_prompt}]
-                },
-                headers={
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01"
-                },
+            response_text = self.llm.chat(
+                messages=[{"role": "user", "content": advice_prompt}],
+                max_tokens=256,
                 timeout=30
             )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return result["content"][0]["text"]
-        except Exception as e:
+            return response_text
+        except LLMError as e:
             print(f"Stylist advice generation failed: {e}")
         
         return ""
@@ -496,24 +446,13 @@ I found these garment options:
 Provide a brief (2-3 sentences) styling recommendation explaining why these choices suit the user's needs."""
 
             try:
-                response = requests.post(
-                    ANTHROPIC_API_ENDPOINT,
-                    json={
-                        "model": MODEL_NAME,
-                        "max_tokens": 256,
-                        "messages": [{"role": "user", "content": reasoning_prompt}]
-                    },
-                    headers={
-                        "Content-Type": "application/json",
-                        "anthropic-version": "2023-06-01"
-                    },
+                reasoning = self.llm.chat(
+                    messages=[{"role": "user", "content": reasoning_prompt}],
+                    max_tokens=256,
                     timeout=30
                 )
-                
-                if response.status_code == 200:
-                    reasoning = response.json()["content"][0]["text"]
-                    result["stylist_advice"] = reasoning
-            except Exception as e:
+                result["stylist_advice"] = reasoning
+            except LLMError as e:
                 result["stylist_advice"] = f"(Reasoning unavailable: {e})"
         
         return result

@@ -51,17 +51,37 @@ python src/mcp_server.py --sse --port 8888
 
 Environment variables (set in `.env`):
 
+### Data & Server
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DRESSCODE_ROOT` | Path to DressCode dataset | Required |
 | `CHROMADB_PATH` | Path to ChromaDB persistence | Required |
-| `LLM_API_ENDPOINT` | LLM API endpoint | `http://localhost:23333/api/anthropic/v1/messages` |
-| `MODEL_NAME` | Claude model name | `claude-3-5-haiku-20241022` |
 | `MCP_HOST` | SSE server host | `0.0.0.0` |
 | `MCP_PORT` | SSE server port | `8888` |
 | `MCP_EXTERNAL_HOST` | External hostname for image URLs | `localhost` |
 | `MCP_USE_SSL` | Enable HTTPS for image URLs | `false` |
 | `MCP_API_KEY` | API key for authentication | (empty = disabled) |
+
+### LLM Provider
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LLM_PROVIDER` | Provider: `anthropic`, `azure_openai`, `openai` | `anthropic` |
+
+**Anthropic (Agent Maestro)** - Development mode:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LLM_API_ENDPOINT` | Agent Maestro or Anthropic API endpoint | `http://localhost:23333/api/anthropic/v1/messages` |
+| `MODEL_NAME` | Claude model name | `claude-3-5-haiku-20241022` |
+
+**Azure OpenAI** - Production mode:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL | Required |
+| `AZURE_OPENAI_API_KEY` | Azure API key | Required |
+| `AZURE_OPENAI_DEPLOYMENT` | Deployment name | `gpt-4o-mini` |
+| `AZURE_OPENAI_API_VERSION` | API version | `2024-08-01-preview` |
 
 ## Available Tools
 

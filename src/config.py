@@ -43,11 +43,23 @@ CATEGORIES = ["dresses", "lower_body", "upper_body"]
 # LLM API Configuration
 # =============================================================================
 
-# LLM API endpoint (Agent Maestro or direct Anthropic)
-LLM_API_ENDPOINT = os.getenv("LLM_API_ENDPOINT", "http://localhost:23333/api/anthropic/v1/messages")
+# LLM Provider: 'anthropic' (Agent Maestro), 'azure_openai', or 'openai'
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 
-# Model name
+# Anthropic / Agent Maestro Configuration
+LLM_API_ENDPOINT = os.getenv("LLM_API_ENDPOINT", "http://localhost:23333/api/anthropic/v1/messages")
 MODEL_NAME = os.getenv("MODEL_NAME", "claude-3-5-haiku-20241022")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", None)
+
+# Azure OpenAI Configuration
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+
+# OpenAI Configuration (for direct OpenAI API)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 # Legacy alias for compatibility
 ANTHROPIC_API_ENDPOINT = LLM_API_ENDPOINT
