@@ -11,20 +11,19 @@ Usage:
     python mcp_server.py
     
     # SSE mode (for remote access)
-    python mcp_server.py --sse --port 8080
+    python mcp_server.py --sse --port 8888
     
     # Or with uvicorn directly
-    uvicorn mcp_server:starlette_app --host 0.0.0.0 --port 8080
+    uvicorn mcp_server:starlette_app --host 0.0.0.0 --port 8888
 """
 import json
 import asyncio
 import argparse
-import base64
 from typing import Any
 from pathlib import Path
 
 from mcp.server import Server
-from mcp.types import Tool, TextContent, ImageContent, Resource
+from mcp.types import Tool, TextContent, Resource
 
 from stylist_tool import StylistSearchTool, TOOL_SCHEMA
 from garment_db import GarmentDatabase
@@ -69,57 +68,6 @@ def get_image_url(image_path: str) -> str | None:
     return None
 
 
-# Additional tool for getting garment images
-GET_IMAGE_SCHEMA = {
-    "name": "get_garment_image",
-    "description": "Get the image of a specific garment by its ID. Returns base64 encoded image.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "garment_id": {
-                "type": "string",
-                "description": "The garment ID (e.g., '049119')"
-            },
-            "category": {
-                "type": "string",
-                "enum": ["dresses", "upper_body", "lower_body"],
-                "description": "The garment category (optional, will search if not provided)"
-            }
-        },
-        "required": ["garment_id"]
-    }
-}
-
-
-def find_garment_image(garment_id: str, category: str = None) -> Path | None:
-    """Find garment image path by ID"""
-    if category:
-        categories = [category]
-    else:
-        categories = ["dresses", "upper_body", "lower_body"]
-    
-    for cat in categories:
-        image_path = DRESSCODE_ROOT / cat / "images" / f"{garment_id}_1.jpg"
-        if image_path.exists():
-            return image_path
-    return None
-
-
-def image_to_base64(image_path: Path, max_size: int = 400) -> str:
-    """Convert image to base64 with optional resizing"""
-    from PIL import Image
-    import io
-    
-    img = Image.open(image_path)
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    img.thumbnail((max_size, max_size))
-    
-    buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=85)
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     """List available tools"""
@@ -128,17 +76,12 @@ async def list_tools() -> list[Tool]:
             name=TOOL_SCHEMA["name"],
             description=TOOL_SCHEMA["description"],
             inputSchema=TOOL_SCHEMA["input_schema"]
-        ),
-        Tool(
-            name=GET_IMAGE_SCHEMA["name"],
-            description=GET_IMAGE_SCHEMA["description"],
-            inputSchema=GET_IMAGE_SCHEMA["input_schema"]
         )
     ]
 
 
 @app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent]:
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Handle tool calls"""
     
     if name == "stylist_recommend":
@@ -159,42 +102,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent | ImageConte
             type="text",
             text=json.dumps(result, ensure_ascii=False, indent=2)
         )]
-    
-    elif name == "get_garment_image":
-        garment_id = arguments["garment_id"]
-        category = arguments.get("category")
-        
-        image_path = find_garment_image(garment_id, category)
-        
-        if image_path is None:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": f"Image not found for garment {garment_id}"})
-            )]
-        
-        # Return base64 encoded image
-        try:
-            image_base64 = image_to_base64(image_path)
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps({
-                        "garment_id": garment_id,
-                        "image_path": str(image_path),
-                        "format": "base64"
-                    })
-                ),
-                ImageContent(
-                    type="image",
-                    data=image_base64,
-                    mimeType="image/jpeg"
-                )
-            ]
-        except Exception as e:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": f"Failed to load image: {str(e)}"})
-            )]
     
     else:
         return [TextContent(
@@ -282,7 +189,7 @@ def create_starlette_app():
             "status": "healthy",
             "server": "stylist-recommender",
             "transport": "sse",
-            "tools": ["stylist_recommend", "get_garment_image"],
+            "tools": ["stylist_recommend"],
             "auth_enabled": MCP_API_KEY_ENABLED
         })
     
