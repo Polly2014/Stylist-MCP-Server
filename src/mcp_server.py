@@ -146,6 +146,7 @@ def create_starlette_app():
         
         # Endpoints that don't require authentication
         PUBLIC_PATHS = {"/health", "/favicon.ico"}
+        PUBLIC_PREFIXES = ("/images/",)  # Image serving is public
         
         async def dispatch(self, request, call_next):
             # Skip auth if API key is not configured
@@ -154,6 +155,10 @@ def create_starlette_app():
             
             # Allow public endpoints without auth
             if request.url.path in self.PUBLIC_PATHS:
+                return await call_next(request)
+            
+            # Allow public prefixes (like /images/)
+            if any(request.url.path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES):
                 return await call_next(request)
             
             # Check API key from query param or header
