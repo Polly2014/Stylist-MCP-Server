@@ -68,13 +68,6 @@ MCP_API_KEY = os.getenv("MCP_API_KEY", None)
 MCP_API_KEY_ENABLED = MCP_API_KEY is not None and len(MCP_API_KEY) > 0
 
 # =============================================================================
-# Image Processing
-# =============================================================================
-
-MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "400"))
-JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "85"))
-
-# =============================================================================
 # Attribute Schema (for garment classification)
 # =============================================================================
 
