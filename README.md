@@ -1,6 +1,10 @@
 # Stylist MCP Server
 
-An AI-powered fashion recommendation MCP (Model Context Protocol) server that provides intelligent outfit suggestions using ChromaDB for semantic search and Claude for natural language understanding.
+An AI-powered fashion recommendation MCP (Model Context Protocol) server that provides intelligent outfit suggestions using ChromaDB for semantic search and Claude/GPT for natural language understanding.
+
+<p align="center">
+  <img src="docs/images/showcase.png" alt="Stylist MCP Server Showcase" width="100%">
+</p>
 
 ## Features
 
