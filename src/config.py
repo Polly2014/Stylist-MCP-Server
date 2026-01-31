@@ -62,6 +62,11 @@ MCP_PORT = int(os.getenv("MCP_PORT", "8888"))
 MCP_EXTERNAL_HOST = os.getenv("MCP_EXTERNAL_HOST", None)  # External IP/hostname for image URLs
 MCP_USE_SSL = os.getenv("MCP_USE_SSL", "false").lower() in ("true", "1", "yes")  # Use HTTPS for image URLs
 
+# API Key for authentication (optional, leave empty to disable)
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+MCP_API_KEY = os.getenv("MCP_API_KEY", None)
+MCP_API_KEY_ENABLED = MCP_API_KEY is not None and len(MCP_API_KEY) > 0
+
 # =============================================================================
 # Image Processing
 # =============================================================================

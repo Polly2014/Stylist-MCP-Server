@@ -41,6 +41,11 @@ env/
 .env.local
 .env.*.local
 
+# Config files with API keys (use .example.json as template)
+config/claude_desktop_remote.json
+config/cursor_mcp.json
+config/mcp_client_sse.json
+
 # Data directories (user-specific)
 data/
 output/

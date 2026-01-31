@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "stylist-recommender": {
+      "url": "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY_HERE",
+      "transport": "sse"
+    }
+  }
+}

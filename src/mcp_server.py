@@ -28,7 +28,7 @@ from mcp.types import Tool, TextContent, ImageContent, Resource
 
 from stylist_tool import StylistSearchTool, TOOL_SCHEMA
 from garment_db import GarmentDatabase
-from config import DRESSCODE_ROOT, MCP_HOST, MCP_PORT, MCP_EXTERNAL_HOST, MCP_USE_SSL
+from config import DRESSCODE_ROOT, MCP_HOST, MCP_PORT, MCP_EXTERNAL_HOST, MCP_USE_SSL, MCP_API_KEY, MCP_API_KEY_ENABLED
 
 
 # Initialize server and tools
@@ -229,6 +229,38 @@ def create_starlette_app():
     from starlette.responses import JSONResponse, Response
     from starlette.middleware import Middleware
     from starlette.middleware.cors import CORSMiddleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    
+    # =========================================================================
+    # API Key Authentication Middleware
+    # =========================================================================
+    class APIKeyMiddleware(BaseHTTPMiddleware):
+        """Middleware to validate API key for protected endpoints"""
+        
+        # Endpoints that don't require authentication
+        PUBLIC_PATHS = {"/health", "/favicon.ico"}
+        
+        async def dispatch(self, request, call_next):
+            # Skip auth if API key is not configured
+            if not MCP_API_KEY_ENABLED:
+                return await call_next(request)
+            
+            # Allow public endpoints without auth
+            if request.url.path in self.PUBLIC_PATHS:
+                return await call_next(request)
+            
+            # Check API key from query param or header
+            api_key = request.query_params.get("apiKey") or request.query_params.get("api_key")
+            if not api_key:
+                api_key = request.headers.get("X-API-Key") or request.headers.get("Authorization", "").replace("Bearer ", "")
+            
+            if api_key != MCP_API_KEY:
+                return JSONResponse(
+                    {"error": "Unauthorized", "message": "Invalid or missing API key"},
+                    status_code=401
+                )
+            
+            return await call_next(request)
     
     # SSE transport at /messages endpoint
     sse = SseServerTransport("/messages/")
@@ -250,7 +282,8 @@ def create_starlette_app():
             "status": "healthy",
             "server": "stylist-recommender",
             "transport": "sse",
-            "tools": ["stylist_recommend", "get_garment_image"]
+            "tools": ["stylist_recommend", "get_garment_image"],
+            "auth_enabled": MCP_API_KEY_ENABLED
         })
     
     async def list_tools_http(request):
@@ -265,6 +298,20 @@ def create_starlette_app():
     
     from starlette.staticfiles import StaticFiles
     
+    # Build middleware list
+    middleware_list = [
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    ]
+    
+    # Add API Key middleware if enabled
+    if MCP_API_KEY_ENABLED:
+        middleware_list.insert(0, Middleware(APIKeyMiddleware))
+    
     # Create Starlette app with CORS enabled
     starlette_app = Starlette(
         debug=True,
@@ -276,14 +323,7 @@ def create_starlette_app():
             # Static file serving for images
             Mount("/images", app=StaticFiles(directory=str(DRESSCODE_ROOT)), name="images"),
         ],
-        middleware=[
-            Middleware(
-                CORSMiddleware,
-                allow_origins=["*"],
-                allow_methods=["*"],
-                allow_headers=["*"],
-            )
-        ]
+        middleware=middleware_list
     )
     
     return starlette_app
