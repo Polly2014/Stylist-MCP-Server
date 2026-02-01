@@ -4,30 +4,49 @@ Provides fashion recommendation tools via Model Context Protocol
 
 Supports two transport modes:
 - stdio: For local Claude Desktop / Cursor integration
-- sse: For remote HTTP access (cross-VM, Semantic Kernel integration)
+- http: For remote HTTP access (Streamable HTTP + SSE)
 
 Usage:
     # stdio mode (default, for local use)
     python mcp_server.py
     
-    # SSE mode (for remote access)
-    python mcp_server.py --sse --port 8888
+    # HTTP mode (for remote access, supports both Streamable HTTP and SSE)
+    python mcp_server.py --http --port 8888
     
     # Or with uvicorn directly
     uvicorn mcp_server:starlette_app --host 0.0.0.0 --port 8888
+    
+Client Configuration (Streamable HTTP - recommended):
+    {
+        "url": "https://stylist.polly.wang/mcp",
+        "headers": {"X-API-Key": "your-api-key"}
+    }
+
+Client Configuration (SSE - legacy):
+    {
+        "command": "npx",
+        "args": ["-y", "mcp-remote", "https://stylist.polly.wang/sse?apiKey=your-api-key", "--transport", "sse-only"]
+    }
 """
 import json
 import asyncio
 import argparse
+import sys
 from typing import Any
 from pathlib import Path
 
+# Support both direct run (python mcp_server.py) and module run (python -m src.mcp_server)
+try:
+    from stylist_tool import StylistSearchTool, TOOL_SCHEMA
+    from garment_db import GarmentDatabase
+    from config import DRESSCODE_ROOT, MCP_HOST, MCP_PORT, MCP_EXTERNAL_HOST, MCP_USE_SSL, MCP_API_KEY, MCP_API_KEY_ENABLED
+except ImportError:
+    from src.stylist_tool import StylistSearchTool, TOOL_SCHEMA
+    from src.garment_db import GarmentDatabase
+    from src.config import DRESSCODE_ROOT, MCP_HOST, MCP_PORT, MCP_EXTERNAL_HOST, MCP_USE_SSL, MCP_API_KEY, MCP_API_KEY_ENABLED
+
 from mcp.server import Server
 from mcp.types import Tool, TextContent, Resource
-
-from stylist_tool import StylistSearchTool, TOOL_SCHEMA
-from garment_db import GarmentDatabase
-from config import DRESSCODE_ROOT, MCP_HOST, MCP_PORT, MCP_EXTERNAL_HOST, MCP_USE_SSL, MCP_API_KEY, MCP_API_KEY_ENABLED
 
 
 # Initialize server and tools
@@ -129,56 +148,98 @@ async def list_resources() -> list[Resource]:
 # =============================================================================
 
 def create_starlette_app():
-    """Create Starlette app with SSE transport for MCP"""
+    """Create Starlette app with SSE and Streamable HTTP transport for MCP"""
     from mcp.server.sse import SseServerTransport
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.routing import Route, Mount
     from starlette.responses import JSONResponse, Response
     from starlette.middleware import Middleware
     from starlette.middleware.cors import CORSMiddleware
-    from starlette.middleware.base import BaseHTTPMiddleware
+    import contextlib
     
     # =========================================================================
-    # API Key Authentication Middleware
+    # API Key Authentication Middleware (Pure ASGI - compatible with SSE)
     # =========================================================================
-    class APIKeyMiddleware(BaseHTTPMiddleware):
-        """Middleware to validate API key for protected endpoints"""
+    class APIKeyMiddleware:
+        """
+        Pure ASGI middleware to validate API key for protected endpoints.
+        Note: We use pure ASGI instead of BaseHTTPMiddleware because 
+        BaseHTTPMiddleware is incompatible with SSE streaming responses.
+        """
         
         # Endpoints that don't require authentication
         PUBLIC_PATHS = {"/health", "/favicon.ico"}
-        PUBLIC_PREFIXES = ("/images/",)  # Image serving is public
+        PUBLIC_PREFIXES = ("/images/", "/.well-known/")  # Image serving and OAuth discovery are public
         
-        async def dispatch(self, request, call_next):
+        def __init__(self, app):
+            self.app = app
+        
+        async def __call__(self, scope, receive, send):
+            # Only process HTTP requests
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+            
             # Skip auth if API key is not configured
             if not MCP_API_KEY_ENABLED:
-                return await call_next(request)
+                await self.app(scope, receive, send)
+                return
+            
+            path = scope["path"]
             
             # Allow public endpoints without auth
-            if request.url.path in self.PUBLIC_PATHS:
-                return await call_next(request)
+            if path in self.PUBLIC_PATHS:
+                await self.app(scope, receive, send)
+                return
             
             # Allow public prefixes (like /images/)
-            if any(request.url.path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES):
-                return await call_next(request)
+            if any(path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES):
+                await self.app(scope, receive, send)
+                return
             
-            # Check API key from query param or header
-            api_key = request.query_params.get("apiKey") or request.query_params.get("api_key")
+            # Extract API key from query params or headers
+            api_key = None
+            
+            # Check query params
+            query_string = scope.get("query_string", b"").decode()
+            if query_string:
+                from urllib.parse import parse_qs
+                params = parse_qs(query_string)
+                api_key = params.get("apiKey", params.get("api_key", [None]))[0]
+            
+            # Check headers if not in query params
             if not api_key:
-                api_key = request.headers.get("X-API-Key") or request.headers.get("Authorization", "").replace("Bearer ", "")
+                headers = dict(scope.get("headers", []))
+                api_key = headers.get(b"x-api-key", b"").decode()
+                if not api_key:
+                    auth_header = headers.get(b"authorization", b"").decode()
+                    if auth_header.startswith("Bearer "):
+                        api_key = auth_header[7:]
             
             if api_key != MCP_API_KEY:
-                return JSONResponse(
+                # Return 401 Unauthorized
+                response = JSONResponse(
                     {"error": "Unauthorized", "message": "Invalid or missing API key"},
                     status_code=401
                 )
+                await response(scope, receive, send)
+                return
             
-            return await call_next(request)
+            await self.app(scope, receive, send)
     
-    # SSE transport at /messages endpoint
+    # SSE transport at /messages endpoint (legacy, for mcp-remote compatibility)
     sse = SseServerTransport("/messages/")
     
+    # Streamable HTTP session manager (new standard, simpler client config)
+    session_manager = StreamableHTTPSessionManager(
+        app=app,
+        json_response=True,  # Use JSON responses for better compatibility
+        stateless=False  # Enable session tracking
+    )
+    
     async def handle_sse(request):
-        """Handle SSE connection for MCP"""
+        """Handle SSE connection for MCP (legacy)"""
         async with sse.connect_sse(
             request.scope, request.receive, request._send
         ) as streams:
@@ -188,14 +249,31 @@ def create_starlette_app():
             )
         return Response()
     
+    # Custom ASGI app for MCP endpoint - handles response lifecycle directly
+    class MCPEndpointApp:
+        """
+        ASGI application for Streamable HTTP MCP endpoint.
+        Allows simple client config like Tavily:
+        {"url": "https://stylist.polly.wang/mcp", "headers": {"X-API-Key": "..."}}
+        """
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                await session_manager.handle_request(scope, receive, send)
+    
+    mcp_endpoint = MCPEndpointApp()
+    
     async def health_check(request):
         """Health check endpoint"""
         return JSONResponse({
             "status": "healthy",
             "server": "stylist-recommender",
-            "transport": "sse",
+            "transport": ["streamable-http", "sse"],
             "tools": ["stylist_recommend"],
-            "auth_enabled": MCP_API_KEY_ENABLED
+            "auth_enabled": MCP_API_KEY_ENABLED,
+            "endpoints": {
+                "mcp": "/mcp (recommended)",
+                "sse": "/sse (legacy)"
+            }
         })
     
     async def list_tools_http(request):
@@ -208,9 +286,23 @@ def create_starlette_app():
             ]
         })
     
+    async def oauth_not_supported(request):
+        """Return 404 for OAuth discovery - we use API key auth instead"""
+        return JSONResponse(
+            {"error": "not_found", "message": "OAuth not supported. Use API key authentication."},
+            status_code=404
+        )
+    
     from starlette.staticfiles import StaticFiles
     
-    # Build middleware list
+    # Lifespan context manager to manage StreamableHTTP session manager
+    @contextlib.asynccontextmanager
+    async def lifespan(app_instance):
+        """Manage application lifecycle including StreamableHTTP sessions"""
+        async with session_manager.run():
+            yield
+    
+    # Build middleware list - only CORS uses the Middleware wrapper
     middleware_list = [
         Middleware(
             CORSMiddleware,
@@ -220,23 +312,33 @@ def create_starlette_app():
         )
     ]
     
-    # Add API Key middleware if enabled
-    if MCP_API_KEY_ENABLED:
-        middleware_list.insert(0, Middleware(APIKeyMiddleware))
-    
-    # Create Starlette app with CORS enabled
-    starlette_app = Starlette(
+    # Create Starlette app with CORS and lifespan
+    base_app = Starlette(
         debug=True,
+        lifespan=lifespan,
         routes=[
             Route("/health", endpoint=health_check, methods=["GET"]),
             Route("/tools", endpoint=list_tools_http, methods=["GET"]),
+            # Streamable HTTP endpoint (new standard - simpler client config)
+            # Using Route with ASGI app directly for proper path handling
+            Route("/mcp", endpoint=mcp_endpoint, methods=["GET", "POST", "DELETE"]),
+            # SSE endpoints (legacy - for mcp-remote compatibility)
             Route("/sse", endpoint=handle_sse, methods=["GET"]),
             Mount("/messages/", app=sse.handle_post_message),
+            # OAuth discovery endpoints - return 404 to indicate we don't support OAuth
+            Route("/.well-known/oauth-authorization-server", endpoint=oauth_not_supported, methods=["GET"]),
+            Route("/.well-known/openid-configuration", endpoint=oauth_not_supported, methods=["GET"]),
             # Static file serving for images
             Mount("/images", app=StaticFiles(directory=str(DRESSCODE_ROOT)), name="images"),
         ],
         middleware=middleware_list
     )
+    
+    # Wrap with API Key middleware if enabled (pure ASGI, SSE compatible)
+    if MCP_API_KEY_ENABLED:
+        starlette_app = APIKeyMiddleware(base_app)
+    else:
+        starlette_app = base_app
     
     return starlette_app
 
@@ -258,8 +360,8 @@ async def run_stdio():
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
-async def run_sse(host: str = None, port: int = None, ssl_cert: str = None, ssl_key: str = None, external_host: str = None):
-    """Run MCP server in SSE mode (for remote access)"""
+async def run_http(host: str = None, port: int = None, ssl_cert: str = None, ssl_key: str = None, external_host: str = None):
+    """Run MCP server in HTTP mode (supports Streamable HTTP and SSE for remote access)"""
     import uvicorn
     
     # Use provided args or fall back to config defaults
@@ -281,11 +383,11 @@ async def run_sse(host: str = None, port: int = None, ssl_cert: str = None, ssl_
         url_host = "localhost"
     set_image_base_url(url_host, port, use_ssl)
     
-    print(f"Starting Stylist Recommender MCP Server (SSE mode)...", flush=True)
+    print(f"Starting Stylist Recommender MCP Server (HTTP mode)...", flush=True)
     print(f"  Listening on {protocol}://{host}:{port}", flush=True)
     print(f"  Health check: {protocol}://{host}:{port}/health", flush=True)
-    print(f"  SSE endpoint: {protocol}://{host}:{port}/sse", flush=True)
-    print(f"  Messages endpoint: {protocol}://{host}:{port}/messages", flush=True)
+    print(f"  MCP endpoint: {protocol}://{host}:{port}/mcp (recommended)", flush=True)
+    print(f"  SSE endpoint: {protocol}://{host}:{port}/sse (legacy)", flush=True)
     print(f"  Images endpoint: {protocol}://{host}:{port}/images/", flush=True)
     
     config = uvicorn.Config(
@@ -304,8 +406,8 @@ async def main():
     """Run the MCP server"""
     parser = argparse.ArgumentParser(description="Stylist Recommender MCP Server")
     parser.add_argument(
-        "--sse", action="store_true",
-        help="Run in SSE mode (HTTP) instead of stdio"
+        "--http", "--sse", action="store_true", dest="http",
+        help="Run in HTTP mode (supports both Streamable HTTP and SSE) instead of stdio"
     )
     parser.add_argument(
         "--host", type=str, default=None,
@@ -330,8 +432,8 @@ async def main():
     
     args = parser.parse_args()
     
-    if args.sse:
-        await run_sse(args.host, args.port, args.ssl_cert, args.ssl_key, args.external_host)
+    if args.http:
+        await run_http(args.host, args.port, args.ssl_cert, args.ssl_key, args.external_host)
     else:
         await run_stdio()
 

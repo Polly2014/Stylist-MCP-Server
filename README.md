@@ -9,9 +9,10 @@ An AI-powered fashion recommendation MCP (Model Context Protocol) server that pr
 ## Features
 
 - 🎨 **Intelligent Outfit Recommendations**: Single items or complete outfit combinations
-- 🌐 **Dual Transport Modes**: 
+- 🌐 **Multiple Transport Modes**: 
   - `stdio` for local Claude Desktop / Cursor integration
-  - `SSE` for remote HTTP access (cross-VM, Semantic Kernel)
+  - `Streamable HTTP` for remote access (recommended, simple config)
+  - `SSE` for legacy remote access (mcp-remote compatibility)
 - 🔍 **Hybrid Search**: Combines metadata filtering with semantic vector search
 - 🌍 **Multilingual**: Supports English and Chinese queries
 - 🧥 **Full Outfit Coordination**: Top + bottom combinations or dresses with style reasoning
@@ -44,11 +45,14 @@ python scripts/build_chromadb.py
 ### 3. Run Server
 
 ```bash
-# stdio mode (for Claude Desktop)
+# stdio mode (for Claude Desktop local)
 python src/mcp_server.py
 
-# SSE mode (for remote access)
-python src/mcp_server.py --sse --port 8888
+# HTTP mode (for remote access - supports Streamable HTTP + SSE)
+python src/mcp_server.py --http --port 8888
+
+# Or with uvicorn directly
+uvicorn src.mcp_server:starlette_app --host 0.0.0.0 --port 8888
 ```
 
 ## Configuration
@@ -235,7 +239,26 @@ Add to `~/.config/Claude/claude_desktop_config.json`:
 }
 ```
 
-### Claude Desktop (Remote SSE)
+### Remote Access (Streamable HTTP - Recommended) ⭐
+
+The simplest way to connect remotely, like Tavily:
+
+```json
+{
+  "mcpServers": {
+    "stylist-recommender": {
+      "url": "https://stylist.polly.wang/mcp",
+      "headers": {
+        "X-API-Key": "YOUR_API_KEY"
+      }
+    }
+  }
+}
+```
+
+### Remote Access (SSE - Legacy)
+
+For older clients that require mcp-remote:
 
 ```json
 {
@@ -243,9 +266,9 @@ Add to `~/.config/Claude/claude_desktop_config.json`:
     "stylist-remote": {
       "command": "npx",
       "args": [
-        "-y", "@anthropic-ai/mcp-remote@latest",
-        "--transport", "sse-only",
-        "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY"
+        "-y", "mcp-remote",
+        "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY",
+        "--transport", "sse-only"
       ]
     }
   }
@@ -259,46 +282,81 @@ Add to `.cursor/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "stylist": {
-      "url": "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY"
+    "stylist-recommender": {
+      "url": "https://stylist.polly.wang/mcp",
+      "headers": {
+        "X-API-Key": "YOUR_API_KEY"
+      }
     }
   }
 }
 ```
 
-### Python Client (SSE)
+### Python Client
 
 ```python
-from mcp import ClientSession
-from mcp.client.sse import sse_client
+import httpx
 
-async def main():
-    url = "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY"
-    
-    async with sse_client(url) as streams:
-        async with ClientSession(*streams) as session:
-            await session.initialize()
-            
-            result = await session.call_tool(
-                "stylist_recommend",
-                {"query": "推荐3套约会穿搭", "include_reasoning": True}
-            )
-            print(result)
+# Streamable HTTP client
+async def call_stylist():
+    async with httpx.AsyncClient() as client:
+        # Initialize
+        response = await client.post(
+            "https://stylist.polly.wang/mcp",
+            headers={
+                "X-API-Key": "YOUR_API_KEY",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            json={
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "python-client", "version": "1.0"}
+                },
+                "id": 1
+            }
+        )
+        session_id = response.headers.get("mcp-session-id")
+        
+        # Call tool
+        response = await client.post(
+            "https://stylist.polly.wang/mcp",
+            headers={
+                "X-API-Key": "YOUR_API_KEY",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "mcp-session-id": session_id
+            },
+            json={
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "name": "stylist_recommend",
+                    "arguments": {"query": "推荐3套约会穿搭"}
+                },
+                "id": 2
+            }
+        )
+        print(response.json())
 ```
 
-## SSE Mode Endpoints
+## HTTP Mode Endpoints
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
 | `/health` | ❌ | Health check |
-| `/sse` | ✅ | SSE connection for MCP |
-| `/messages/` | ✅ | MCP message handling |
+| `/mcp` | ✅ | **Streamable HTTP endpoint (recommended)** |
+| `/sse` | ✅ | SSE connection for MCP (legacy) |
+| `/messages/` | ✅ | MCP message handling (SSE) |
 | `/tools` | ✅ | List available tools |
 | `/images/*` | ❌ | Static image serving |
 
 **Authentication Methods:**
+- Header (recommended): `X-API-Key: YOUR_KEY`
 - Query parameter: `?apiKey=YOUR_KEY`
-- Header: `X-API-Key: YOUR_KEY`
 - Bearer token: `Authorization: Bearer YOUR_KEY`
 
 ## Project Structure
@@ -360,7 +418,7 @@ LLM_API_ENDPOINT=http://localhost:23335/api/anthropic/v1/messages python scripts
 
 1. Run MCP Server on internal port:
    ```bash
-   python src/mcp_server.py --sse --port 8888
+   python src/mcp_server.py --http --port 8888
    ```
 
 2. Configure Nginx reverse proxy with SSL:
