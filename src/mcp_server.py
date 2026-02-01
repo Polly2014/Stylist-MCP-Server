@@ -4,28 +4,22 @@ Provides fashion recommendation tools via Model Context Protocol
 
 Supports two transport modes:
 - stdio: For local Claude Desktop / Cursor integration
-- http: For remote HTTP access (Streamable HTTP + SSE)
+- http: For remote HTTP access (Streamable HTTP)
 
 Usage:
     # stdio mode (default, for local use)
     python mcp_server.py
     
-    # HTTP mode (for remote access, supports both Streamable HTTP and SSE)
+    # HTTP mode (for remote access)
     python mcp_server.py --http --port 8888
     
     # Or with uvicorn directly
     uvicorn mcp_server:starlette_app --host 0.0.0.0 --port 8888
     
-Client Configuration (Streamable HTTP - recommended):
+Client Configuration:
     {
         "url": "https://stylist.polly.wang/mcp",
         "headers": {"X-API-Key": "your-api-key"}
-    }
-
-Client Configuration (SSE - legacy):
-    {
-        "command": "npx",
-        "args": ["-y", "mcp-remote", "https://stylist.polly.wang/sse?apiKey=your-api-key", "--transport", "sse-only"]
     }
 """
 import json
@@ -144,12 +138,11 @@ async def list_resources() -> list[Resource]:
 
 
 # =============================================================================
-# SSE Transport Setup (for remote/cross-VM access)
+# HTTP Transport Setup (Streamable HTTP)
 # =============================================================================
 
 def create_starlette_app():
-    """Create Starlette app with SSE and Streamable HTTP transport for MCP"""
-    from mcp.server.sse import SseServerTransport
+    """Create Starlette app with Streamable HTTP transport for MCP"""
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.routing import Route, Mount
@@ -159,13 +152,11 @@ def create_starlette_app():
     import contextlib
     
     # =========================================================================
-    # API Key Authentication Middleware (Pure ASGI - compatible with SSE)
+    # API Key Authentication Middleware (Pure ASGI)
     # =========================================================================
     class APIKeyMiddleware:
         """
         Pure ASGI middleware to validate API key for protected endpoints.
-        Note: We use pure ASGI instead of BaseHTTPMiddleware because 
-        BaseHTTPMiddleware is incompatible with SSE streaming responses.
         """
         
         # Endpoints that don't require authentication
@@ -228,26 +219,12 @@ def create_starlette_app():
             
             await self.app(scope, receive, send)
     
-    # SSE transport at /messages endpoint (legacy, for mcp-remote compatibility)
-    sse = SseServerTransport("/messages/")
-    
-    # Streamable HTTP session manager (new standard, simpler client config)
+    # Streamable HTTP session manager
     session_manager = StreamableHTTPSessionManager(
         app=app,
         json_response=True,  # Use JSON responses for better compatibility
         stateless=False  # Enable session tracking
     )
-    
-    async def handle_sse(request):
-        """Handle SSE connection for MCP (legacy)"""
-        async with sse.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
-            await app.run(
-                streams[0], streams[1], 
-                app.create_initialization_options()
-            )
-        return Response()
     
     # Custom ASGI app for MCP endpoint - handles response lifecycle directly
     class MCPEndpointApp:
@@ -267,13 +244,10 @@ def create_starlette_app():
         return JSONResponse({
             "status": "healthy",
             "server": "stylist-recommender",
-            "transport": ["streamable-http", "sse"],
+            "transport": "streamable-http",
             "tools": ["stylist_recommend"],
             "auth_enabled": MCP_API_KEY_ENABLED,
-            "endpoints": {
-                "mcp": "/mcp (recommended)",
-                "sse": "/sse (legacy)"
-            }
+            "endpoint": "/mcp"
         })
     
     async def list_tools_http(request):
@@ -319,12 +293,8 @@ def create_starlette_app():
         routes=[
             Route("/health", endpoint=health_check, methods=["GET"]),
             Route("/tools", endpoint=list_tools_http, methods=["GET"]),
-            # Streamable HTTP endpoint (new standard - simpler client config)
-            # Using Route with ASGI app directly for proper path handling
+            # Streamable HTTP endpoint
             Route("/mcp", endpoint=mcp_endpoint, methods=["GET", "POST", "DELETE"]),
-            # SSE endpoints (legacy - for mcp-remote compatibility)
-            Route("/sse", endpoint=handle_sse, methods=["GET"]),
-            Mount("/messages/", app=sse.handle_post_message),
             # OAuth discovery endpoints - return 404 to indicate we don't support OAuth
             Route("/.well-known/oauth-authorization-server", endpoint=oauth_not_supported, methods=["GET"]),
             Route("/.well-known/openid-configuration", endpoint=oauth_not_supported, methods=["GET"]),
@@ -334,7 +304,7 @@ def create_starlette_app():
         middleware=middleware_list
     )
     
-    # Wrap with API Key middleware if enabled (pure ASGI, SSE compatible)
+    # Wrap with API Key middleware if enabled
     if MCP_API_KEY_ENABLED:
         starlette_app = APIKeyMiddleware(base_app)
     else:
@@ -386,8 +356,7 @@ async def run_http(host: str = None, port: int = None, ssl_cert: str = None, ssl
     print(f"Starting Stylist Recommender MCP Server (HTTP mode)...", flush=True)
     print(f"  Listening on {protocol}://{host}:{port}", flush=True)
     print(f"  Health check: {protocol}://{host}:{port}/health", flush=True)
-    print(f"  MCP endpoint: {protocol}://{host}:{port}/mcp (recommended)", flush=True)
-    print(f"  SSE endpoint: {protocol}://{host}:{port}/sse (legacy)", flush=True)
+    print(f"  MCP endpoint: {protocol}://{host}:{port}/mcp", flush=True)
     print(f"  Images endpoint: {protocol}://{host}:{port}/images/", flush=True)
     
     config = uvicorn.Config(
@@ -406,16 +375,16 @@ async def main():
     """Run the MCP server"""
     parser = argparse.ArgumentParser(description="Stylist Recommender MCP Server")
     parser.add_argument(
-        "--http", "--sse", action="store_true", dest="http",
-        help="Run in HTTP mode (supports both Streamable HTTP and SSE) instead of stdio"
+        "--http", action="store_true",
+        help="Run in HTTP mode (Streamable HTTP) instead of stdio"
     )
     parser.add_argument(
         "--host", type=str, default=None,
-        help=f"Host to bind (SSE mode only, default: {MCP_HOST})"
+        help=f"Host to bind (HTTP mode only, default: {MCP_HOST})"
     )
     parser.add_argument(
         "--port", type=int, default=None,
-        help=f"Port to bind (SSE mode only, default: {MCP_PORT})"
+        help=f"Port to bind (HTTP mode only, default: {MCP_PORT})"
     )
     parser.add_argument(
         "--ssl-cert", type=str, default=None,

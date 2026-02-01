@@ -566,34 +566,6 @@ def test_mcp_endpoint(base_url: str, api_key: str = None) -> Tuple[bool, str]:
         return False, str(e)
 
 
-def test_sse_endpoint(base_url: str, api_key: str = None) -> Tuple[bool, str]:
-    """Test SSE endpoint (legacy, for mcp-remote compatibility)"""
-    try:
-        url = f"{base_url}/sse"
-        if api_key:
-            url += f"?apiKey={api_key}"
-        
-        # SSE endpoint should return event stream
-        response = requests.get(url, timeout=5, stream=True)
-        
-        if response.status_code == 200:
-            content_type = response.headers.get('content-type', '')
-            if 'text/event-stream' in content_type:
-                log(f"✅ SSE endpoint OK (legacy)")
-                log(f"   Content-Type: {content_type}")
-                response.close()
-                return True, "SSE streaming"
-            else:
-                response.close()
-                return False, f"Unexpected content-type: {content_type}"
-        elif response.status_code == 401:
-            return False, "Unauthorized - API key required"
-        else:
-            return False, f"Status {response.status_code}"
-    except Exception as e:
-        return False, str(e)
-
-
 # =============================================================================
 # Main Test Runner
 # =============================================================================
@@ -709,7 +681,6 @@ def main():
         results.append(run_test("Health Endpoint", test_health, args.url))
         results.append(run_test("Tools Endpoint", test_tools_list, args.url, api_key))
         results.append(run_test("MCP Endpoint (Streamable HTTP)", test_mcp_endpoint, args.url, api_key))
-        results.append(run_test("SSE Endpoint (Legacy)", test_sse_endpoint, args.url, api_key))
         results.append(run_test("Image Serving", test_image_access, args.url))
         results.append(run_test("Response Image URLs", test_image_in_response, args.url))
     

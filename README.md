@@ -11,8 +11,7 @@ An AI-powered fashion recommendation MCP (Model Context Protocol) server that pr
 - 🎨 **Intelligent Outfit Recommendations**: Single items or complete outfit combinations
 - 🌐 **Multiple Transport Modes**: 
   - `stdio` for local Claude Desktop / Cursor integration
-  - `Streamable HTTP` for remote access (recommended, simple config)
-  - `SSE` for legacy remote access (mcp-remote compatibility)
+  - `Streamable HTTP` for remote access (simple config like Tavily)
 - 🔍 **Hybrid Search**: Combines metadata filtering with semantic vector search
 - 🌍 **Multilingual**: Supports English and Chinese queries
 - 🧥 **Full Outfit Coordination**: Top + bottom combinations or dresses with style reasoning
@@ -48,7 +47,7 @@ python scripts/build_chromadb.py
 # stdio mode (for Claude Desktop local)
 python src/mcp_server.py
 
-# HTTP mode (for remote access - supports Streamable HTTP + SSE)
+# HTTP mode (for remote access)
 python src/mcp_server.py --http --port 8888
 
 # Or with uvicorn directly
@@ -65,8 +64,8 @@ Environment variables (set in `.env`):
 |----------|-------------|---------|
 | `DRESSCODE_ROOT` | Path to DressCode dataset | Required |
 | `CHROMADB_PATH` | Path to ChromaDB persistence | Required |
-| `MCP_HOST` | SSE server host | `0.0.0.0` |
-| `MCP_PORT` | SSE server port | `8888` |
+| `MCP_HOST` | HTTP server host | `0.0.0.0` |
+| `MCP_PORT` | HTTP server port | `8888` |
 | `MCP_EXTERNAL_HOST` | External hostname for image URLs | `localhost` |
 | `MCP_USE_SSL` | Enable HTTPS for image URLs | `false` |
 | `MCP_API_KEY` | API key for authentication | (empty = disabled) |
@@ -256,25 +255,6 @@ The simplest way to connect remotely, like Tavily:
 }
 ```
 
-### Remote Access (SSE - Legacy)
-
-For older clients that require mcp-remote:
-
-```json
-{
-  "mcpServers": {
-    "stylist-remote": {
-      "command": "npx",
-      "args": [
-        "-y", "mcp-remote",
-        "https://stylist.polly.wang/sse?apiKey=YOUR_API_KEY",
-        "--transport", "sse-only"
-      ]
-    }
-  }
-}
-```
-
 ### Cursor
 
 Add to `.cursor/mcp.json`:
@@ -348,9 +328,7 @@ async def call_stylist():
 | Endpoint | Auth | Description |
 |----------|------|-------------|
 | `/health` | ❌ | Health check |
-| `/mcp` | ✅ | **Streamable HTTP endpoint (recommended)** |
-| `/sse` | ✅ | SSE connection for MCP (legacy) |
-| `/messages/` | ✅ | MCP message handling (SSE) |
+| `/mcp` | ✅ | **Streamable HTTP endpoint** |
 | `/tools` | ✅ | List available tools |
 | `/images/*` | ❌ | Static image serving |
 
@@ -367,14 +345,14 @@ Stylist-MCP-Server/
 │   ├── config.py          # Configuration (env vars)
 │   ├── garment_db.py      # ChromaDB wrapper
 │   ├── stylist_tool.py    # Recommendation logic (single_item + full_outfit)
-│   └── mcp_server.py      # MCP server (stdio + SSE + auth)
+│   └── mcp_server.py      # MCP server (stdio + Streamable HTTP)
 ├── scripts/
 │   ├── build_chromadb.py  # Index builder
 │   ├── build_from_jsonl.py # Build from attributes JSONL
 │   └── test_mcp.py        # Comprehensive test suite
 ├── config/
 │   ├── claude_desktop.json           # Local stdio config
-│   ├── claude_desktop_remote.example.json  # Remote SSE config
+│   ├── claude_desktop_remote.example.json  # Remote HTTP config
 │   ├── cursor_mcp.example.json       # Cursor config
 │   └── python_client_example.py      # Python client example
 ├── data/
@@ -410,7 +388,7 @@ LLM_API_ENDPOINT=http://localhost:23335/api/anthropic/v1/messages python scripts
 - 👕 Single Item: T-shirt, dress, Chinese queries
 - 👔 Full Outfit: Basic, formal, Chinese, male (no dresses)
 - 🧠 LLM Reasoning: Scoring, reasons, stylist advice
-- 🌐 Remote: Health, tools, images, URL accessibility
+- 🌐 Remote: Health, tools, MCP endpoint, images
 
 ## Deployment
 
