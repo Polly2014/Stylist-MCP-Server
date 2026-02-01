@@ -522,6 +522,78 @@ def test_image_in_response(base_url: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
+def test_mcp_endpoint(base_url: str, api_key: str = None) -> Tuple[bool, str]:
+    """Test MCP Streamable HTTP endpoint (new standard)"""
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        if api_key:
+            headers["X-API-Key"] = api_key
+        
+        # Test initialize request
+        response = requests.post(
+            f"{base_url}/mcp",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test-script", "version": "1.0"}
+                },
+                "id": 1
+            },
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("result", {}).get("serverInfo"):
+                server_info = data["result"]["serverInfo"]
+                log(f"✅ MCP endpoint OK (Streamable HTTP)")
+                log(f"   Server: {server_info.get('name')} v{server_info.get('version')}")
+                return True, f"{server_info.get('name')}"
+            else:
+                return False, f"Unexpected response: {data}"
+        elif response.status_code == 401:
+            return False, "Unauthorized - API key required"
+        else:
+            return False, f"Status {response.status_code}: {response.text[:100]}"
+    except Exception as e:
+        return False, str(e)
+
+
+def test_sse_endpoint(base_url: str, api_key: str = None) -> Tuple[bool, str]:
+    """Test SSE endpoint (legacy, for mcp-remote compatibility)"""
+    try:
+        url = f"{base_url}/sse"
+        if api_key:
+            url += f"?apiKey={api_key}"
+        
+        # SSE endpoint should return event stream
+        response = requests.get(url, timeout=5, stream=True)
+        
+        if response.status_code == 200:
+            content_type = response.headers.get('content-type', '')
+            if 'text/event-stream' in content_type:
+                log(f"✅ SSE endpoint OK (legacy)")
+                log(f"   Content-Type: {content_type}")
+                response.close()
+                return True, "SSE streaming"
+            else:
+                response.close()
+                return False, f"Unexpected content-type: {content_type}"
+        elif response.status_code == 401:
+            return False, "Unauthorized - API key required"
+        else:
+            return False, f"Status {response.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
 # =============================================================================
 # Main Test Runner
 # =============================================================================
@@ -636,6 +708,8 @@ def main():
         
         results.append(run_test("Health Endpoint", test_health, args.url))
         results.append(run_test("Tools Endpoint", test_tools_list, args.url, api_key))
+        results.append(run_test("MCP Endpoint (Streamable HTTP)", test_mcp_endpoint, args.url, api_key))
+        results.append(run_test("SSE Endpoint (Legacy)", test_sse_endpoint, args.url, api_key))
         results.append(run_test("Image Serving", test_image_access, args.url))
         results.append(run_test("Response Image URLs", test_image_in_response, args.url))
     
